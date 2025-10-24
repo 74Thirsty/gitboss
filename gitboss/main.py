@@ -5,13 +5,23 @@ import logging
 import sys
 from pathlib import Path
 
-from PyQt5.QtWidgets import QApplication
+try:  # pragma: no cover - import guard
+    from PyQt5.QtWidgets import QApplication
+except ImportError as exc:  # pragma: no cover - import guard
+    QApplication = None  # type: ignore[assignment]
+    _QT_IMPORT_ERROR = exc
+else:  # pragma: no cover - import guard
+    _QT_IMPORT_ERROR = None
 
-from core.logger import configure_logging
-from core.repository_scanner import scan_for_repositories
-from data.config_manager import AppConfig, load_config, save_config
-from ui.main_window import MainWindow
-from ui.startup_wizard import StartupWizard
+from typing import TYPE_CHECKING
+
+from .core.logger import configure_logging
+from .core.repository_scanner import scan_for_repositories
+from .data.config_manager import AppConfig, load_config, save_config
+
+if TYPE_CHECKING:  # pragma: no cover - import only for type checking
+    from .ui.main_window import MainWindow
+    from .ui.startup_wizard import StartupWizard
 
 LOGGER = logging.getLogger(__name__)
 
@@ -45,6 +55,17 @@ def _collect_repositories(config: AppConfig) -> list[Path]:
 
 
 def main() -> int:
+    if QApplication is None:
+        message = (
+            "PyQt5 is required to run the GitBoss UI. Install the project dependencies "
+            "with `pip install -r requirements.txt`."
+        )
+        if _QT_IMPORT_ERROR is not None:
+            raise SystemExit(f"{message}\nOriginal error: {_QT_IMPORT_ERROR}")
+        raise SystemExit(message)
+
+    from .ui.startup_wizard import StartupWizard
+
     configure_logging()
     app = QApplication(sys.argv)
 
@@ -56,6 +77,8 @@ def main() -> int:
     save_config(config)
 
     repositories = _collect_repositories(config)
+
+    from .ui.main_window import MainWindow
 
     window = MainWindow(config, repositories)
     window.show()
