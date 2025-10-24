@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
-from data.config_manager import AppConfig, save_config
+from ..data.config_manager import AppConfig, save_config
 
 LOGGER = logging.getLogger(__name__)
 

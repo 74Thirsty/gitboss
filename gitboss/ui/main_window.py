@@ -24,8 +24,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from core.git_manager import GitManager
-from data.config_manager import AppConfig, save_config
+from ..core.git_manager import GitManager
+from ..data.config_manager import AppConfig, save_config
 
 LOGGER = logging.getLogger(__name__)
 
