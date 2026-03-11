@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenuBar,
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
@@ -48,7 +49,7 @@ class RepositoryListWidget(QListWidget):
         self.clear()
         for repo in repos:
             item = QListWidgetItem(str(repo))
-            item.setData(Qt.UserRole, str(repo))
+            item.setData(Qt.ItemDataRole.UserRole, str(repo))
             self.addItem(item)
 
 
@@ -59,12 +60,9 @@ class LogConsole(QTextEdit):
         super().__init__(parent)
         self.setReadOnly(True)
         self.setFont(QFont("Fira Code", 10))
-<<<<<<< ours
-=======
 
     def append_lines(self, lines: Iterable[str]) -> None:
         self.append("\n".join(lines))
->>>>>>> theirs
 
 
 class MainWindow(QMainWindow):
@@ -135,30 +133,19 @@ class MainWindow(QMainWindow):
         self.log_dock = QDockWidget("Command Log", self)
         self.log_dock.setWidget(self.log_console)
         self.log_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
-        self.addDockWidget(Qt.BottomDockWidgetArea, self.log_dock)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.log_dock)
 
         self.activity_list = QListWidget()
         self.activity_dock = QDockWidget("Activity Feed", self)
         self.activity_dock.setWidget(self.activity_list)
         self.activity_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.activity_dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.activity_dock)
 
     def _apply_theme(self) -> None:
         self.setStyleSheet(
             """
             QMainWindow { background-color: #0f1115; color: #e6e6e6; }
             QLabel { color: #e6e6e6; }
-<<<<<<< ours
-            QLineEdit { background-color: #1a1e24; border: 1px solid #2a2f3a; border-radius: 6px; padding: 6px 8px; color: #e6e6e6; }
-            QListWidget, QTextEdit { background-color: #151820; border: 1px solid #2a2f3a; border-radius: 8px; padding: 6px; color: #e6e6e6; }
-            QPushButton { background-color: #2d6cdf; color: white; border: none; border-radius: 6px; padding: 6px 12px; }
-            QPushButton:hover { background-color: #3b7bff; }
-            QPushButton:disabled { background-color: #3b3f4a; color: #9aa0aa; }
-            QTabWidget::pane { border: 1px solid #2a2f3a; border-radius: 8px; }
-            QTabBar::tab { background-color: #151820; padding: 8px 14px; border-top-left-radius: 6px; border-top-right-radius: 6px; }
-            QTabBar::tab:selected { background-color: #232935; }
-            QFrame[card="true"] { background-color: #151820; border: 1px solid #2a2f3a; border-radius: 10px; }
-=======
             QLineEdit, QSpinBox {
                 background-color: #1a1e24;
                 border: 1px solid #2a2f3a;
@@ -188,25 +175,24 @@ class MainWindow(QMainWindow):
                 background-color: #151820;
                 color: #b8bec9;
                 padding: 9px 16px;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
+                border-start-start-radius: 6px;
+                border-start-end-radius: 6px;
                 border: 1px solid #2a2f3a;
-                border-bottom: none;
-                margin-right: 2px;
+                border-block-end: none;
+                margin-inline-end: 2px;
             }
             QTabBar::tab:hover { background-color: #1d2330; color: #f0f4ff; }
             QTabBar::tab:selected {
                 background-color: #232935;
                 color: #ffffff;
                 font-weight: 700;
-                border-top: 2px solid #4c8dff;
+                border-block-start: 2px solid #4c8dff;
             }
             QFrame[card="true"] {
                 background-color: #151820;
                 border: 1px solid #2a2f3a;
                 border-radius: 10px;
             }
->>>>>>> theirs
             """
         )
 
@@ -397,9 +383,18 @@ class MainWindow(QMainWindow):
 
     def _create_menus(self) -> None:
         toolbar = QToolBar("Main Toolbar")
-        self.addToolBar(Qt.TopToolBarArea, toolbar)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
 
-        file_menu = self.menuBar().addMenu("File")
+        menubar = self.menuBar()
+        if menubar is None:
+            menubar = QMenuBar(self)
+            self.setMenuBar(menubar)
+        file_menu = menubar.addMenu("File")
+        # Ensure file_menu is a valid QMenu
+        if file_menu is None:
+            from PyQt5.QtWidgets import QMenu
+            file_menu = QMenu("File", self)
+            menubar.addMenu(file_menu)
 
         self.add_repo_action = QAction("Add Existing Repo", self)
         self.add_repo_action.triggered.connect(self._on_add_repo)
@@ -420,7 +415,15 @@ class MainWindow(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
-        tools_menu = self.menuBar().addMenu("Tools")
+        menubar = self.menuBar()
+        if menubar is None:
+            menubar = QMenuBar(self)
+            self.setMenuBar(menubar)
+        tools_menu = menubar.addMenu("Tools")
+        if tools_menu is None:
+            from PyQt5.QtWidgets import QMenu
+            tools_menu = QMenu("Tools", self)
+            menubar.addMenu(tools_menu)
         rescan_action = QAction("Rescan Base Directory", self)
         rescan_action.triggered.connect(self._on_rescan_repositories)
         tools_menu.addAction(rescan_action)
@@ -433,12 +436,24 @@ class MainWindow(QMainWindow):
         run_git_action.triggered.connect(self._prompt_run_git_command)
         tools_menu.addAction(run_git_action)
 
-        view_menu = self.menuBar().addMenu("View")
+        menubar = self.menuBar()
+        if menubar is None:
+            menubar = QMenuBar(self)
+            self.setMenuBar(menubar)
+        view_menu = menubar.addMenu("View")
+        if view_menu is None:
+            from PyQt5.QtWidgets import QMenu
+            view_menu = QMenu("View", self)
+            menubar.addMenu(view_menu)
         view_menu.addAction(self.log_dock.toggleViewAction())
         view_menu.addAction(self.activity_dock.toggleViewAction())
         view_menu.addAction(toolbar.toggleViewAction())
 
-        help_menu = self.menuBar().addMenu("Help")
+        help_menu = menubar.addMenu("Help")
+        if help_menu is None:
+            from PyQt5.QtWidgets import QMenu
+            help_menu = QMenu("Help", self)
+            menubar.addMenu(help_menu)
         about_action = QAction("About GitBoss", self)
         about_action.triggered.connect(self._show_about_dialog)
         help_menu.addAction(about_action)
@@ -458,7 +473,7 @@ class MainWindow(QMainWindow):
             self._set_repo_actions_enabled(False)
             return
 
-        self.current_repo = Path(current.data(Qt.UserRole))
+        self.current_repo = Path(current.data(Qt.ItemDataRole.UserRole))
         self.status_bar.showMessage(f"Selected repository: {self.current_repo}")
         self.repo_title_label.setText(self.current_repo.name)
         self._set_repo_actions_enabled(True)
@@ -473,10 +488,6 @@ class MainWindow(QMainWindow):
             manager = GitManager(self.current_repo)
             dirty = manager.is_dirty()
             branch_list = manager.list_branches()
-<<<<<<< ours
-            branches = ", ".join(branch_list)
-=======
->>>>>>> theirs
             status_lines = list(manager.list_status())
         except ValueError as exc:
             QMessageBox.critical(self, "Repository Error", str(exc))
@@ -635,51 +646,8 @@ class MainWindow(QMainWindow):
             self._log_activity(f"Added repository {path.name}")
 
     def _on_clone_repo(self) -> None:
-<<<<<<< ours
-        url, ok = QInputDialog.getText(self, "Clone Repository", "Repository URL:")
-        if not ok or not url.strip():
-            return
-
-        target_dir = QFileDialog.getExistingDirectory(
-            self,
-            "Clone Into Directory",
-            self.config.base_directory or str(Path.home()),
-        )
-        if not target_dir:
-            return
-
-        destination_name, ok = QInputDialog.getText(
-            self,
-            "Clone Repository",
-            "Destination folder name (optional):",
-        )
-        if not ok:
-            return
-
-        destination_path = Path(target_dir)
-        if destination_name.strip():
-            destination_path = destination_path / destination_name.strip()
-
-        try:
-            GitManager.clone(url.strip(), destination_path)
-        except Exception as exc:
-            LOGGER.exception("Clone failed")
-            QMessageBox.critical(self, "Clone Failed", str(exc))
-            self._log_activity(f"Clone failed: {exc}")
-            return
-
-        if destination_path not in self.repos:
-            self.repos.append(destination_path)
-            self.repo_list_widget.populate(self.repos)
-            self.repo_list_widget.setCurrentRow(self.repos.index(destination_path))
-            self._persist_repositories()
-
-        self._log_activity(f"Cloned repository into {destination_path}")
-        self.status_bar.showMessage(f"Cloned repository into {destination_path}", 5000)
-=======
         QMessageBox.information(self, "Clone Repository", "Clone workflow is not yet implemented.")
         self._log_activity("Viewed clone repository flow")
->>>>>>> theirs
 
     def _on_remove_repo(self) -> None:
         current_item = self.repo_list_widget.currentItem()
@@ -726,82 +694,6 @@ class MainWindow(QMainWindow):
         self._log_activity("Copied repository path")
 
     def _on_pull_latest(self) -> None:
-<<<<<<< ours
-        branch, ok = QInputDialog.getText(self, "Pull Latest", "Branch to pull (leave blank for current):")
-        if not ok:
-            return
-        branch_name = branch.strip() or None
-
-        def operation(manager: GitManager) -> str:
-            return manager.pull(branch=branch_name)
-
-        branch_text = branch_name or "current"
-        self._run_repo_operation(operation, f"Pulled latest from origin/{branch_text}")
-
-    def _on_push_changes(self) -> None:
-        branch, ok = QInputDialog.getText(self, "Push Changes", "Branch to push (leave blank for current):")
-        if not ok:
-            return
-        branch_name = branch.strip() or None
-
-        def operation(manager: GitManager) -> str:
-            return manager.push(branch=branch_name)
-
-        branch_text = branch_name or "current"
-        self._run_repo_operation(operation, f"Pushed changes to origin/{branch_text}")
-
-    def _on_new_branch(self) -> None:
-        branch_name, ok = QInputDialog.getText(self, "New Branch", "New branch name:")
-        if not ok:
-            return
-        clean_name = branch_name.strip()
-        if not clean_name:
-            QMessageBox.information(self, "New Branch", "Branch name cannot be empty.")
-            return
-
-        def operation(manager: GitManager) -> str:
-            return manager.create_branch(clean_name, checkout=True)
-
-        self._run_repo_operation(operation, f"Created and checked out branch {clean_name}")
-
-    def _on_run_git_command(self) -> None:
-        command = self.custom_git_command.text().strip()
-        if not command:
-            QMessageBox.information(self, "Run Git Command", "Enter a git command first.")
-            return
-
-        def operation(manager: GitManager) -> str:
-            return manager.run_git_command(command)
-
-        self._run_repo_operation(operation, f"Ran git {command}")
-
-    def _prompt_run_git_command(self) -> None:
-        command, ok = QInputDialog.getText(self, "Run Git Command", "Git command (omit leading 'git'):")
-        if not ok or not command.strip():
-            return
-        self.custom_git_command.setText(command.strip())
-        self._on_run_git_command()
-
-    def _run_repo_operation(self, operation: Callable[[GitManager], str], success_message: str) -> None:
-        if self.current_repo is None:
-            QMessageBox.information(self, "Git Operation", "Select a repository first.")
-            return
-
-        try:
-            manager = GitManager(self.current_repo)
-            output = operation(manager)
-        except Exception as exc:
-            LOGGER.exception("Git operation failed")
-            QMessageBox.critical(self, "Git Operation Failed", str(exc))
-            self._log_activity(f"Git operation failed: {exc}")
-            return
-
-        if output:
-            self.log_console.append(f"$ {success_message}\n{output}")
-        self.status_bar.showMessage(success_message, 5000)
-        self._log_activity(success_message)
-        self._refresh_current_repo()
-=======
         if self.current_repo is None:
             return
         try:
@@ -827,7 +719,6 @@ class MainWindow(QMainWindow):
 
     def _on_new_branch(self) -> None:
         QMessageBox.information(self, "New Branch", "Branch creation workflow is not yet implemented.")
->>>>>>> theirs
 
     def _show_about_dialog(self) -> None:
         QMessageBox.information(self, "About GitBoss", "GitBoss is a Git workspace for local + GitHub operations.")
@@ -850,13 +741,8 @@ class MainWindow(QMainWindow):
         self.pull_button.setEnabled(enabled)
         self.push_button.setEnabled(enabled)
         self.new_branch_button.setEnabled(enabled)
-<<<<<<< ours
-        self.run_git_command_button.setEnabled(enabled)
-        self.custom_git_command.setEnabled(enabled)
-=======
         self.commit_refresh_button.setEnabled(enabled)
         self.diff_refresh_button.setEnabled(enabled)
->>>>>>> theirs
 
     def _log_activity(self, message: str) -> None:
         self.activity_list.addItem(message)
