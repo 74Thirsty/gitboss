@@ -68,10 +68,17 @@ class LogConsole(QTextEdit):
 class MainWindow(QMainWindow):
     """Primary UI for GitBoss."""
 
-    def __init__(self, config: AppConfig, repos: List[Path]) -> None:
-        super().__init__()
+    def __init__(
+        self,
+        config: AppConfig,
+        repositories: list[Path],
+        *args,
+        **kwargs
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.status_bar = self.statusBar()  # <-- Move this to the top, right after super()
         self.config = config
-        self.repos = repos
+        self.repositories = repositories
         self.current_repo: Path | None = None
         self.current_commits: list[GitCommitSummary] = []
         self.github_manager: GitHubManager | None = None
@@ -81,7 +88,7 @@ class MainWindow(QMainWindow):
         self._apply_theme()
 
         self.repo_list_widget = RepositoryListWidget()
-        self.repo_list_widget.populate(self.repos)
+        self.repo_list_widget.populate(self.repositories)
         self.repo_list_widget.currentItemChanged.connect(self._on_repo_selected)
 
         self.repo_filter = QLineEdit()
@@ -100,12 +107,9 @@ class MainWindow(QMainWindow):
         self._build_main_layout()
         self._build_docks()
 
-        self.status_bar = QStatusBar()
-        self.setStatusBar(self.status_bar)
-
         self._create_menus()
         self._set_repo_actions_enabled(False)
-        if self.repos:
+        if self.repositories:
             self.repo_list_widget.setCurrentRow(0)
 
     def _build_main_layout(self) -> None:
@@ -460,8 +464,8 @@ class MainWindow(QMainWindow):
 
     def _on_tab_changed(self, index: int) -> None:
         tab_name = self.tab_widget.tabText(index)
-        self.status_bar.showMessage(f"Active tab: {tab_name}")
-        self._log_activity(f"Switched to {tab_name} tab")
+        if self.status_bar is not None:
+            self.status_bar.showMessage(f"Active tab: {tab_name}")
 
     def _on_repo_selected(self, current: QListWidgetItem | None, previous: QListWidgetItem | None) -> None:
         del previous
@@ -474,7 +478,8 @@ class MainWindow(QMainWindow):
             return
 
         self.current_repo = Path(current.data(Qt.ItemDataRole.UserRole))
-        self.status_bar.showMessage(f"Selected repository: {self.current_repo}")
+        if self.status_bar is not None:
+            self.status_bar.showMessage(f"Selected repository: {self.current_repo}")
         self.repo_title_label.setText(self.current_repo.name)
         self._set_repo_actions_enabled(True)
         self._refresh_current_repo()
@@ -619,7 +624,8 @@ class MainWindow(QMainWindow):
             del self.config.preferences["github_token"]
         save_config(self.config)
         self.github_manager = None
-        self.status_bar.showMessage("Settings saved")
+        if self.status_bar is not None:
+            self.status_bar.showMessage("Settings saved")
         self._log_activity("Saved settings")
 
     def _github_manager_or_none(self) -> GitHubManager | None:
@@ -638,10 +644,10 @@ class MainWindow(QMainWindow):
             return
 
         path = Path(directory)
-        if path not in self.repos:
-            self.repos.append(path)
-            self.repo_list_widget.populate(self.repos)
-            self.repo_list_widget.setCurrentRow(self.repos.index(path))
+        if path not in self.repositories:
+            self.repositories.append(path)
+            self.repo_list_widget.populate(self.repositories)
+            self.repo_list_widget.setCurrentRow(self.repositories.index(path))
             self._persist_repositories()
             self._log_activity(f"Added repository {path.name}")
 
@@ -655,10 +661,10 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Remove Repository", "Select a repository to remove.")
             return
 
-        repo_path = Path(current_item.data(Qt.UserRole))
-        if repo_path in self.repos:
-            self.repos.remove(repo_path)
-            self.repo_list_widget.populate(self.repos)
+        repo_path = Path(current_item.data(Qt.ItemDataRole.UserRole))
+        if repo_path in self.repositories:
+            self.repositories.remove(repo_path)
+            self.repo_list_widget.populate(self.repositories)
             self._persist_repositories()
             self._log_activity(f"Removed repository {repo_path.name}")
 
@@ -668,7 +674,7 @@ class MainWindow(QMainWindow):
             return
 
         scanned = scan_for_repositories(Path(self.config.base_directory))
-        self.repos = list(dict.fromkeys([*self.repos, *scanned]))
+        self.repositories = list(dict.fromkeys([*self.repositories, *scanned]))
         self.repo_list_widget.populate(self.repos)
         self._persist_repositories()
         self._log_activity("Rescanned repositories")
@@ -689,9 +695,14 @@ class MainWindow(QMainWindow):
     def _copy_repo_path(self) -> None:
         if self.current_repo is None:
             return
-        QApplication.clipboard().setText(str(self.current_repo))
-        self.status_bar.showMessage("Repository path copied to clipboard.")
-        self._log_activity("Copied repository path")
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(str(self.current_repo))
+            if self.status_bar is not None:
+                self.status_bar.showMessage("Repository path copied to clipboard.")
+            self._log_activity("Copied repository path")
+        else:
+            QMessageBox.warning(self, "Clipboard Error", "Clipboard is not available.")
 
     def _on_pull_latest(self) -> None:
         if self.current_repo is None:
@@ -720,6 +731,49 @@ class MainWindow(QMainWindow):
     def _on_new_branch(self) -> None:
         QMessageBox.information(self, "New Branch", "Branch creation workflow is not yet implemented.")
 
+    def _prompt_run_git_command(self) -> None:
+        if self.current_repo is None:
+            QMessageBox.information(self, "Run Git Command", "Select a repository first.")
+            return
+
+        command, accepted = QInputDialog.getText(
+            self,
+            "Run Git Command",
+            "Enter a git subcommand (without the leading 'git'):",
+            text=self.custom_git_command.text().strip(),
+        )
+        if not accepted:
+            return
+
+        self.custom_git_command.setText(command)
+        self._on_run_git_command()
+
+    def _on_run_git_command(self) -> None:
+        if self.current_repo is None:
+            QMessageBox.information(self, "Run Git Command", "Select a repository first.")
+            return
+
+        command = self.custom_git_command.text().strip()
+        if not command:
+            QMessageBox.information(self, "Run Git Command", "Enter a git command to run.")
+            return
+
+        try:
+            manager = GitManager(self.current_repo)
+            output = manager.run_git_command(command)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Run Git Command", str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Run Git Command", str(exc))
+            return
+
+        self.log_console.append(f"$ git {command}\n{output}")
+        if self.status_bar is not None:
+            self.status_bar.showMessage(f"Ran git {command}")
+        self._log_activity(f"Ran git command: {command}")
+        self._refresh_current_repo()
+
     def _show_about_dialog(self) -> None:
         QMessageBox.information(self, "About GitBoss", "GitBoss is a Git workspace for local + GitHub operations.")
 
@@ -727,7 +781,8 @@ class MainWindow(QMainWindow):
         query = text.lower().strip()
         for index in range(self.repo_list_widget.count()):
             item = self.repo_list_widget.item(index)
-            item.setHidden(query not in item.text().lower())
+            if item is not None:
+                item.setHidden(query not in item.text().lower())
 
     def _update_stat_cards(self, branches: str, status: str, modified: str) -> None:
         self.branch_value_label.setText(branches)
