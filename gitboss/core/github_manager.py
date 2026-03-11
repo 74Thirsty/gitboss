@@ -45,6 +45,29 @@ class WorkflowArtifactSummary:
     expired: bool
 
 
+@dataclass(frozen=True)
+class IssueSummary:
+    """Normalized open issue payload."""
+
+    number: int
+    title: str
+    state: str
+    html_url: str
+
+
+@dataclass(frozen=True)
+class PullRequestSummary:
+    """Normalized pull request payload."""
+
+    number: int
+    title: str
+    state: str
+    html_url: str
+    user_login: str
+    head_ref: str
+    base_ref: str
+
+
 class GitHubManager:
     """Wrapper around the PyGithub client with GitHub Actions support."""
 
@@ -76,6 +99,46 @@ class GitHubManager:
             return [repo.full_name for repo in self._require_client().get_user().get_repos()]
         except GithubException as exc:
             LOGGER.error("Failed to fetch repositories: %s", exc)
+            raise
+
+    def list_open_issues(self, repository: str) -> List[IssueSummary]:
+        """List open non-PR issues for a repository."""
+
+        try:
+            issues = self._get_repository(repository).get_issues(state="open")
+            return [
+                IssueSummary(
+                    number=issue.number,
+                    title=issue.title,
+                    state=issue.state,
+                    html_url=issue.html_url,
+                )
+                for issue in issues
+                if issue.pull_request is None
+            ]
+        except GithubException as exc:
+            LOGGER.error("Failed to list issues for %s: %s", repository, exc)
+            raise
+
+    def list_open_pull_requests(self, repository: str) -> List[PullRequestSummary]:
+        """List open pull requests for a repository."""
+
+        try:
+            pull_requests = self._get_repository(repository).get_pulls(state="open")
+            return [
+                PullRequestSummary(
+                    number=pr.number,
+                    title=pr.title,
+                    state=pr.state,
+                    html_url=pr.html_url,
+                    user_login=pr.user.login,
+                    head_ref=pr.head.ref,
+                    base_ref=pr.base.ref,
+                )
+                for pr in pull_requests
+            ]
+        except GithubException as exc:
+            LOGGER.error("Failed to list pull requests for %s: %s", repository, exc)
             raise
 
     def list_workflows(self, repository: str) -> List[WorkflowSummary]:
@@ -216,6 +279,8 @@ class GitHubManager:
 
 __all__ = [
     "GitHubManager",
+    "IssueSummary",
+    "PullRequestSummary",
     "WorkflowArtifactSummary",
     "WorkflowRunSummary",
     "WorkflowSummary",
