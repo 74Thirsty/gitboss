@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import logging
 import shlex
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional
+from urllib.parse import urlparse
 
 from git import GitCommandError, InvalidGitRepositoryError, Repo
 
@@ -46,6 +48,18 @@ class GitCommitDetail:
     file_summaries: list[GitFileChangeSummary]
 
 
+@dataclass(frozen=True)
+class GitGraphCommit:
+    """One line of graph-rendered commit data."""
+    graph_prefix: str
+    sha: str
+    short_sha: str
+    refs: str
+    author_name: str
+    authored_date: str
+    subject: str
+
+
 class GitManager:
     """Wrapper around :class:`git.Repo` providing higher level helpers."""
 
@@ -56,9 +70,33 @@ class GitManager:
     def load(self) -> None:
         try:
             self.repo = Repo(self.repo_path)
+            self._ensure_safe_directory_configured()
         except InvalidGitRepositoryError as exc:
             LOGGER.error("Invalid git repository at %s", self.repo_path)
             raise ValueError(f"Invalid git repository: {self.repo_path}") from exc
+
+    def _ensure_safe_directory_configured(self) -> None:
+        """Ensure Git trusts this repository path to avoid dubious ownership failures."""
+        repo_path = str(self.repo_path.resolve())
+        try:
+            result = subprocess.run(
+                ["git", "config", "--global", "--get-all", "safe.directory"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            configured = {line.strip() for line in result.stdout.splitlines() if line.strip()}
+            if repo_path in configured:
+                return
+            subprocess.run(
+                ["git", "config", "--global", "--add", "safe.directory", repo_path],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            LOGGER.info("Added safe.directory for %s", repo_path)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Unable to update git safe.directory for %s: %s", repo_path, exc)
 
     def _require_repo(self) -> Repo:
         if not self.repo:
@@ -82,20 +120,90 @@ class GitManager:
             LOGGER.error("Failed to retrieve status: %s", exc)
             return []
 
+    def list_branch_refs(self) -> list[str]:
+        repo = self._require_repo()
+        output = repo.git.branch("--all", "--format=%(refname:short)")
+        refs = [line.strip() for line in output.splitlines() if line.strip()]
+        return sorted(dict.fromkeys(refs))
+
     def list_commits(self, limit: int = 200, rev: str = "HEAD") -> list[GitCommitSummary]:
         repo = self._require_repo()
         commits: list[GitCommitSummary] = []
-        for commit in repo.iter_commits(rev=rev, max_count=limit):
+        if rev == "--all":
+            rev_arg = "--all"
+        else:
+            rev_arg = rev
+        for commit in repo.iter_commits(rev_arg, max_count=limit):
             commits.append(
                 GitCommitSummary(
                     sha=commit.hexsha,
                     short_sha=commit.hexsha[:10],
-                    subject=commit.summary,
-                    author_name=commit.author.name,
+                    subject=commit.summary.decode() if isinstance(commit.summary, bytes) else commit.summary,
+                    author_name=commit.author.name or "",
                     authored_datetime=commit.authored_datetime.isoformat(),
                 )
             )
         return commits
+
+    def render_commit_graph(self, limit: int = 200, rev: str = "HEAD") -> str:
+        repo = self._require_repo()
+        args = ["--graph", "--decorate", "--oneline", f"-n{limit}"]
+        if rev == "--all":
+            args.append("--all")
+        else:
+            args.append(rev)
+        return repo.git.log(*args)
+
+    def list_commit_graph(self, limit: int = 200, rev: str = "HEAD") -> list[GitGraphCommit]:
+        """Return structured, graph-aligned commit rows for UI rendering."""
+        repo = self._require_repo()
+        pretty = "%x1f%H%x1f%h%x1f%d%x1f%an%x1f%ad%x1f%s"
+        args = ["--graph", "--decorate=short", "--date=short", f"--pretty=format:{pretty}", f"-n{limit}"]
+        if rev == "--all":
+            args.append("--all")
+        else:
+            args.append(rev)
+        output = repo.git.log(*args)
+        rows: list[GitGraphCommit] = []
+        for line in output.splitlines():
+            if "\x1f" not in line:
+                continue
+            graph_prefix, payload = line.split("\x1f", 1)
+            parts = payload.split("\x1f")
+            if len(parts) != 6:
+                continue
+            sha, short_sha, refs, author_name, authored_date, subject = parts
+            rows.append(
+                GitGraphCommit(
+                    graph_prefix=graph_prefix.rstrip(),
+                    sha=sha,
+                    short_sha=short_sha,
+                    refs=refs.strip().strip("()"),
+                    author_name=author_name,
+                    authored_date=authored_date,
+                    subject=subject,
+                )
+            )
+        return rows
+
+    def get_origin_repository_name(self) -> str | None:
+        repo = self._require_repo()
+        try:
+            remote_url = repo.remote("origin").url
+        except ValueError:
+            return None
+        if remote_url.startswith("git@"):
+            _, path = remote_url.split(":", 1)
+        else:
+            parsed = urlparse(remote_url)
+            path = parsed.path.lstrip("/")
+        normalized = path.removesuffix(".git").strip("/")
+        if normalized.count("/") < 1:
+            return None
+        owner, repo_name = normalized.split("/", 1)
+        if not owner or not repo_name:
+            return None
+        return f"{owner}/{repo_name}"
 
     def get_commit_details(self, commit_sha: str) -> GitCommitDetail:
         repo = self._require_repo()
@@ -105,7 +213,7 @@ class GitManager:
         for path, file_stats in stats.items():
             file_summaries.append(
                 GitFileChangeSummary(
-                    path=path,
+                    path=str(path),
                     insertions=int(file_stats.get("insertions", 0)),
                     deletions=int(file_stats.get("deletions", 0)),
                     change_type=str(file_stats.get("change_type", "modified")),
@@ -113,10 +221,10 @@ class GitManager:
             )
         return GitCommitDetail(
             sha=commit.hexsha,
-            author_name=commit.author.name,
-            author_email=commit.author.email,
+            author_name=commit.author.name or "",
+            author_email=commit.author.email or "",
             authored_datetime=commit.authored_datetime.isoformat(),
-            message=commit.message,
+            message=commit.message.decode() if isinstance(commit.message, bytes) else commit.message,
             parents=[parent.hexsha for parent in commit.parents],
             file_summaries=file_summaries,
         )
@@ -211,5 +319,6 @@ __all__ = [
     "GitCommitDetail",
     "GitCommitSummary",
     "GitFileChangeSummary",
+    "GitGraphCommit",
     "GitManager",
 ]

@@ -40,3 +40,39 @@ def test_diff_stat_and_patch(tmp_path):
 
     assert "a.txt" in stat
     assert "+two" in patch
+
+
+def test_origin_repository_name_parsing(tmp_path):
+    repo = Repo.init(tmp_path)
+    repo.create_remote("origin", "git@github.com:octo/repo.git")
+
+    manager = GitManager(tmp_path)
+    assert manager.get_origin_repository_name() == "octo/repo"
+
+
+def test_list_commits_with_all_flag(tmp_path):
+    repo = Repo.init(tmp_path)
+    _commit_file(repo, tmp_path, "a.txt", "one\n", "init")
+    default_branch = repo.active_branch.name
+    repo.create_head("feature").checkout()
+    _commit_file(repo, tmp_path, "b.txt", "branch\n", "feature commit")
+    repo.heads[default_branch].checkout()
+
+    manager = GitManager(tmp_path)
+    commits = manager.list_commits(limit=20, rev="--all")
+    subjects = [commit.subject for commit in commits]
+    assert "feature commit" in subjects
+
+
+def test_list_commit_graph_returns_structured_rows(tmp_path):
+    repo = Repo.init(tmp_path)
+    _commit_file(repo, tmp_path, "a.txt", "one\n", "init")
+    _commit_file(repo, tmp_path, "a.txt", "one\ntwo\n", "update a")
+
+    manager = GitManager(tmp_path)
+    rows = manager.list_commit_graph(limit=10, rev="HEAD")
+
+    assert rows
+    assert rows[0].sha
+    assert rows[0].short_sha
+    assert rows[0].subject

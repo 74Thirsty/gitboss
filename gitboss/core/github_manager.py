@@ -80,7 +80,13 @@ class GitHubManager:
         if not self.token:
             raise ValueError("GitHub token is required")
         self.client = Github(self.token)
-        LOGGER.info("Authenticated with GitHub")
+        try:
+            login = self.client.get_user().login
+        except GithubException as exc:
+            self.client = None
+            LOGGER.error("GitHub authentication failed: %s", exc)
+            raise ValueError("GitHub authentication failed. Check token validity and scopes.") from exc
+        LOGGER.info("Authenticated with GitHub as %s", login)
 
     def _require_client(self) -> Github:
         if not self.client:

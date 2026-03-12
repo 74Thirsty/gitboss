@@ -136,3 +136,18 @@ def test_workflow_run_operations():
             expired=False,
         )
     ]
+
+
+def test_authenticate_validates_token(monkeypatch):
+    class FakeGithub:
+        def __init__(self, token):
+            self.token = token
+
+        def get_user(self):
+            return SimpleNamespace(login="octocat")
+
+    monkeypatch.setattr("gitboss.core.github_manager.Github", FakeGithub)
+    manager = GitHubManager(token="x")
+    manager.authenticate()
+
+    assert manager.client is not None

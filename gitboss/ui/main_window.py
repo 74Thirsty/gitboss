@@ -10,6 +10,7 @@ from PyQt5.QtGui import QDesktopServices, QFont
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
+    QComboBox,
     QDockWidget,
     QFileDialog,
     QFormLayout,
@@ -32,6 +33,8 @@ from PyQt5.QtWidgets import (
     QToolBar,
     QVBoxLayout,
     QWidget,
+    QTreeWidget,
+    QTreeWidgetItem,
 )
 
 from ..core.git_manager import GitCommitSummary, GitManager
@@ -81,6 +84,7 @@ class MainWindow(QMainWindow):
         self.repositories = repositories
         self.current_repo: Path | None = None
         self.current_commits: list[GitCommitSummary] = []
+        self.current_commit_graph_rows: list[GitGraphCommit] = []
         self.github_manager: GitHubManager | None = None
 
         self.setWindowTitle("GitBoss")
@@ -281,11 +285,30 @@ class MainWindow(QMainWindow):
         self.commit_limit.setSingleStep(10)
         self.commit_refresh_button = QPushButton("Load Commit Graph")
         self.commit_refresh_button.clicked.connect(self._refresh_commits)
+        self.commit_ref_selector = QComboBox()
+        self.commit_ref_selector.setEditable(False)
+        self.commit_ref_selector.setMinimumWidth(260)
+        self.commit_ref_selector.currentTextChanged.connect(lambda _value: self._refresh_commits())
+        self.commit_ref_selector.addItem("--all")
+        self.commit_ref_selector.addItem("HEAD")
+        self.commit_ref_selector.setCurrentText("--all")
         top_bar.addWidget(QLabel("Commit limit:"))
         top_bar.addWidget(self.commit_limit)
+        top_bar.addWidget(QLabel("Ref:"))
+        top_bar.addWidget(self.commit_ref_selector)
         top_bar.addWidget(self.commit_refresh_button)
         top_bar.addStretch(1)
         layout.addLayout(top_bar)
+
+        self.commit_graph_tree = QTreeWidget()
+        self.commit_graph_tree.setColumnCount(5)
+        self.commit_graph_tree.setHeaderLabels(["Graph", "Commit", "Refs", "Author", "Date"])
+        self.commit_graph_tree.setRootIsDecorated(False)
+        self.commit_graph_tree.setUniformRowHeights(True)
+        self.commit_graph_tree.setAlternatingRowColors(True)
+        self.commit_graph_tree.setFont(QFont("Fira Code", 10))
+        self.commit_graph_tree.itemSelectionChanged.connect(self._on_commit_graph_selected)
+        layout.addWidget(self.commit_graph_tree, stretch=2)
 
         panels = QHBoxLayout()
         self.commit_list = QListWidget()
@@ -294,7 +317,7 @@ class MainWindow(QMainWindow):
         self.commit_detail.setReadOnly(True)
         panels.addWidget(self.commit_list, stretch=2)
         panels.addWidget(self.commit_detail, stretch=3)
-        layout.addLayout(panels)
+        layout.addLayout(panels, stretch=3)
         return widget
 
     def _create_diffs_tab(self) -> QWidget:
@@ -416,7 +439,7 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
         exit_action = QAction("Exit", self)
-        exit_action.triggered.connect(self.close)
+        exit_action.triggered.connect(lambda: self.close())
         file_menu.addAction(exit_action)
 
         menubar = self.menuBar()
@@ -493,11 +516,21 @@ class MainWindow(QMainWindow):
             manager = GitManager(self.current_repo)
             dirty = manager.is_dirty()
             branch_list = manager.list_branches()
+            branch_refs = branch_list
             status_lines = list(manager.list_status())
         except ValueError as exc:
             QMessageBox.critical(self, "Repository Error", str(exc))
             LOGGER.exception("Failed to load repository")
             return
+
+        selected_ref = self.commit_ref_selector.currentText()
+        self.commit_ref_selector.blockSignals(True)
+        self.commit_ref_selector.clear()
+        self.commit_ref_selector.addItem("--all")
+        self.commit_ref_selector.addItems(branch_refs)
+        index = self.commit_ref_selector.findText(selected_ref)
+        self.commit_ref_selector.setCurrentIndex(index if index >= 0 else 0)
+        self.commit_ref_selector.blockSignals(False)
 
         details = [
             f"Path: {self.current_repo}",
@@ -512,6 +545,7 @@ class MainWindow(QMainWindow):
             status="Dirty" if dirty else "Clean",
             modified=str(len(status_lines)),
         )
+        self._prefill_github_repository()
         self._log_activity(f"Loaded repository {self.current_repo.name}")
 
     def _refresh_commits(self) -> None:
@@ -519,10 +553,32 @@ class MainWindow(QMainWindow):
             return
         try:
             manager = GitManager(self.current_repo)
-            self.current_commits = manager.list_commits(limit=self.commit_limit.value())
-        except ValueError as exc:
+            rev = self.commit_ref_selector.currentText().strip() or "--all"
+            self.current_commits = manager.list_commits(limit=self.commit_limit.value(), rev=rev)
+            self.current_commit_graph_rows = manager.list_commit_graph(limit=self.commit_limit.value(), rev=rev)
+        except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Commit Error", str(exc))
+            self.commit_graph_tree.clear()
             return
+
+        self.commit_graph_tree.clear()
+        for row in self.current_commit_graph_rows:
+            item = QTreeWidgetItem(
+                [
+                    row.graph_prefix,
+                    f"{row.short_sha} {row.subject}",
+                    row.refs,
+                    row.author_name,
+                    row.authored_date,
+                ]
+            )
+            item.setData(0, Qt.ItemDataRole.UserRole, row.sha)
+            self.commit_graph_tree.addTopLevelItem(item)
+        self.commit_graph_tree.resizeColumnToContents(0)
+        self.commit_graph_tree.resizeColumnToContents(2)
+        self.commit_graph_tree.resizeColumnToContents(4)
+        if self.commit_graph_tree.topLevelItemCount() > 0:
+            self.commit_graph_tree.setCurrentItem(self.commit_graph_tree.topLevelItem(0))
         self.commit_list.clear()
         for commit in self.current_commits:
             self.commit_list.addItem(
@@ -530,7 +586,33 @@ class MainWindow(QMainWindow):
             )
         if self.current_commits:
             self.commit_list.setCurrentRow(0)
-        self._log_activity(f"Loaded {len(self.current_commits)} commits")
+        self._log_activity(f"Loaded {len(self.current_commits)} commits from {rev}")
+    def _on_commit_graph_selected(self) -> None:
+        selected = self.commit_graph_tree.selectedItems()
+        if not selected:
+            return
+        sha = selected[0].data(0, Qt.ItemDataRole.UserRole)
+        if not sha:
+            return
+        for index, commit in enumerate(self.current_commits):
+            if commit.sha == sha:
+                self.commit_list.setCurrentRow(index)
+                break
+    def _prefill_github_repository(self) -> None:
+        if self.current_repo is None:
+            return
+
+        try:
+            inferred = GitManager(self.current_repo).get_origin_repository_name()
+        except Exception:  # noqa: BLE001
+            return
+
+        if not inferred:
+            return
+        if not self.issues_repo_input.text().strip():
+            self.issues_repo_input.setText(inferred)
+        if not self.pr_repo_input.text().strip():
+            self.pr_repo_input.setText(inferred)
 
     def _on_commit_selected(self, row: int) -> None:
         if row < 0 or row >= len(self.current_commits) or self.current_repo is None:
@@ -675,7 +757,7 @@ class MainWindow(QMainWindow):
 
         scanned = scan_for_repositories(Path(self.config.base_directory))
         self.repositories = list(dict.fromkeys([*self.repositories, *scanned]))
-        self.repo_list_widget.populate(self.repos)
+        self.repo_list_widget.populate(self.repositories)
         self._persist_repositories()
         self._log_activity("Rescanned repositories")
 
@@ -804,7 +886,7 @@ class MainWindow(QMainWindow):
         self.activity_list.scrollToBottom()
 
     def _persist_repositories(self) -> None:
-        self.config.preferences["repositories"] = [str(repo) for repo in self.repos]
+        self.config.preferences["repositories"] = [str(repo) for repo in self.repositories]
         save_config(self.config)
 
 
