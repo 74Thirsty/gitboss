@@ -1,3 +1,20 @@
+import pytest
+@pytest.mark.parametrize(
+    ("raw", "normalized"),
+    [
+        ("octo/repo", "octo/repo"),
+        (" https://github.com/octo/repo ", "octo/repo"),
+        ("git@github.com:octo/repo.git", "octo/repo"),
+    ],
+)
+def test_normalize_repository_name_valid(raw, normalized):
+    assert GitHubManager.normalize_repository_name(raw) == normalized
+
+
+@pytest.mark.parametrize("raw", ["", "octo", "github.com/octo/repo", "octo/re po"])
+def test_normalize_repository_name_invalid(raw):
+    with pytest.raises(ValueError):
+        GitHubManager.normalize_repository_name(raw)
 from types import SimpleNamespace
 
 import pytest
@@ -92,6 +109,21 @@ def test_methods_require_authentication():
 
     with pytest.raises(RuntimeError):
         manager.list_repositories()
+
+
+def test_authenticate_validates_token(monkeypatch):
+    class FakeGithub:
+        def __init__(self, token):
+            self.token = token
+
+        def get_user(self):
+            return SimpleNamespace(login="octocat")
+
+    monkeypatch.setattr("gitboss.core.github_manager.Github", FakeGithub)
+    manager = GitHubManager(token="x")
+    manager.authenticate()
+
+    assert manager.client is not None
 
 
 def test_list_repositories_and_workflows():

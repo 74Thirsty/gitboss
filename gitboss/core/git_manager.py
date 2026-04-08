@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import logging
-import shlex
 import subprocess
+import shlex
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional
-from urllib.parse import urlparse
 
 from git import GitCommandError, InvalidGitRepositoryError, Repo
 
@@ -51,6 +51,7 @@ class GitCommitDetail:
 @dataclass(frozen=True)
 class GitGraphCommit:
     """One line of graph-rendered commit data."""
+
     graph_prefix: str
     sha: str
     short_sha: str
@@ -77,6 +78,7 @@ class GitManager:
 
     def _ensure_safe_directory_configured(self) -> None:
         """Ensure Git trusts this repository path to avoid dubious ownership failures."""
+
         repo_path = str(self.repo_path.resolve())
         try:
             result = subprocess.run(
@@ -88,6 +90,7 @@ class GitManager:
             configured = {line.strip() for line in result.stdout.splitlines() if line.strip()}
             if repo_path in configured:
                 return
+
             subprocess.run(
                 ["git", "config", "--global", "--add", "safe.directory", repo_path],
                 check=True,
@@ -110,6 +113,12 @@ class GitManager:
     def list_branches(self) -> List[str]:
         return [branch.name for branch in self._require_repo().branches]
 
+    def list_branch_refs(self) -> list[str]:
+        repo = self._require_repo()
+        output = repo.git.branch("--all", "--format=%(refname:short)")
+        refs = [line.strip() for line in output.splitlines() if line.strip()]
+        return sorted(dict.fromkeys(refs))
+
     def current_branch(self) -> str:
         return self._require_repo().active_branch.name
 
@@ -120,20 +129,15 @@ class GitManager:
             LOGGER.error("Failed to retrieve status: %s", exc)
             return []
 
-    def list_branch_refs(self) -> list[str]:
-        repo = self._require_repo()
-        output = repo.git.branch("--all", "--format=%(refname:short)")
-        refs = [line.strip() for line in output.splitlines() if line.strip()]
-        return sorted(dict.fromkeys(refs))
-
     def list_commits(self, limit: int = 200, rev: str = "HEAD") -> list[GitCommitSummary]:
         repo = self._require_repo()
         commits: list[GitCommitSummary] = []
+        iter_kwargs = {"max_count": limit}
         if rev == "--all":
-            rev_arg = "--all"
+            iter_kwargs["all"] = True
         else:
-            rev_arg = rev
-        for commit in repo.iter_commits(rev_arg, max_count=limit):
+            iter_kwargs["rev"] = rev
+        for commit in repo.iter_commits(**iter_kwargs):
             commits.append(
                 GitCommitSummary(
                     sha=commit.hexsha,
@@ -156,6 +160,7 @@ class GitManager:
 
     def list_commit_graph(self, limit: int = 200, rev: str = "HEAD") -> list[GitGraphCommit]:
         """Return structured, graph-aligned commit rows for UI rendering."""
+
         repo = self._require_repo()
         pretty = "%x1f%H%x1f%h%x1f%d%x1f%an%x1f%ad%x1f%s"
         args = ["--graph", "--decorate=short", "--date=short", f"--pretty=format:{pretty}", f"-n{limit}"]
@@ -163,6 +168,7 @@ class GitManager:
             args.append("--all")
         else:
             args.append(rev)
+
         output = repo.git.log(*args)
         rows: list[GitGraphCommit] = []
         for line in output.splitlines():
@@ -187,16 +193,20 @@ class GitManager:
         return rows
 
     def get_origin_repository_name(self) -> str | None:
+        """Return origin remote in owner/repo format when it can be inferred."""
+
         repo = self._require_repo()
         try:
             remote_url = repo.remote("origin").url
         except ValueError:
             return None
+
         if remote_url.startswith("git@"):
             _, path = remote_url.split(":", 1)
         else:
             parsed = urlparse(remote_url)
             path = parsed.path.lstrip("/")
+
         normalized = path.removesuffix(".git").strip("/")
         if normalized.count("/") < 1:
             return None
@@ -267,6 +277,7 @@ class GitManager:
     @staticmethod
     def clone(repository_url: str, destination: Path) -> Path:
         destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
         Repo.clone_from(repository_url, destination)
         LOGGER.info("Cloned %s into %s", repository_url, destination)
         return destination
@@ -297,6 +308,10 @@ class GitManager:
         argv = shlex.split(command)
         if not argv:
             raise ValueError("Git command cannot be empty")
+        if argv[0] == "git":
+            argv = argv[1:]
+            if not argv:
+                raise ValueError("Enter a git subcommand (example: status --short).")
 
         method = argv[0].replace("-", "_")
         args = argv[1:]

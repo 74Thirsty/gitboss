@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMenu,
     QMenuBar,
     QMessageBox,
     QPushButton,
@@ -30,6 +31,8 @@ from PyQt5.QtWidgets import (
     QStatusBar,
     QTabWidget,
     QTextEdit,
+    QTreeWidget,
+    QTreeWidgetItem,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -37,7 +40,7 @@ from PyQt5.QtWidgets import (
     QTreeWidgetItem,
 )
 
-from ..core.git_manager import GitCommitSummary, GitManager
+from ..core.git_manager import GitCommitSummary, GitGraphCommit, GitManager
 from ..core.github_manager import GitHubManager
 from ..core.repository_scanner import scan_for_repositories
 from ..data.config_manager import AppConfig, save_config
@@ -94,6 +97,8 @@ class MainWindow(QMainWindow):
         self.repo_list_widget = RepositoryListWidget()
         self.repo_list_widget.populate(self.repositories)
         self.repo_list_widget.currentItemChanged.connect(self._on_repo_selected)
+        self.repo_list_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.repo_list_widget.customContextMenuRequested.connect(self._show_repo_context_menu)
 
         self.repo_filter = QLineEdit()
         self.repo_filter.setPlaceholderText("Filter repositories...")
@@ -137,6 +142,15 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
     def _build_docks(self) -> None:
+        self.branch_list = QListWidget()
+        self.branch_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.branch_list.customContextMenuRequested.connect(self._show_branch_context_menu)
+        self.branch_list.itemDoubleClicked.connect(self._checkout_branch_from_item)
+        self.branch_dock = QDockWidget("Branch Browser", self)
+        self.branch_dock.setWidget(self.branch_list)
+        self.branch_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.branch_dock)
+
         self.log_console = LogConsole()
         self.log_dock = QDockWidget("Command Log", self)
         self.log_dock.setWidget(self.log_console)
@@ -351,7 +365,7 @@ class MainWindow(QMainWindow):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         self.issues_repo_input = QLineEdit()
-        self.issues_repo_input.setPlaceholderText("owner/repo")
+        self.issues_repo_input.setPlaceholderText("owner/repo or GitHub URL")
         self.issues_refresh_button = QPushButton("Load Open Issues")
         self.issues_refresh_button.clicked.connect(self._refresh_issues)
         self.issues_output = QPlainTextEdit()
@@ -366,7 +380,7 @@ class MainWindow(QMainWindow):
         widget = QWidget()
         layout = QVBoxLayout(widget)
         self.pr_repo_input = QLineEdit()
-        self.pr_repo_input.setPlaceholderText("owner/repo")
+        self.pr_repo_input.setPlaceholderText("owner/repo or GitHub URL")
         self.pr_refresh_button = QPushButton("Load Open PRs")
         self.pr_refresh_button.clicked.connect(self._refresh_prs)
         self.pr_output = QPlainTextEdit()
@@ -419,7 +433,6 @@ class MainWindow(QMainWindow):
         file_menu = menubar.addMenu("File")
         # Ensure file_menu is a valid QMenu
         if file_menu is None:
-            from PyQt5.QtWidgets import QMenu
             file_menu = QMenu("File", self)
             menubar.addMenu(file_menu)
 
@@ -448,7 +461,6 @@ class MainWindow(QMainWindow):
             self.setMenuBar(menubar)
         tools_menu = menubar.addMenu("Tools")
         if tools_menu is None:
-            from PyQt5.QtWidgets import QMenu
             tools_menu = QMenu("Tools", self)
             menubar.addMenu(tools_menu)
         rescan_action = QAction("Rescan Base Directory", self)
@@ -469,26 +481,48 @@ class MainWindow(QMainWindow):
             self.setMenuBar(menubar)
         view_menu = menubar.addMenu("View")
         if view_menu is None:
-            from PyQt5.QtWidgets import QMenu
             view_menu = QMenu("View", self)
             menubar.addMenu(view_menu)
+        view_menu.addAction(self.branch_dock.toggleViewAction())
         view_menu.addAction(self.log_dock.toggleViewAction())
         view_menu.addAction(self.activity_dock.toggleViewAction())
         view_menu.addAction(toolbar.toggleViewAction())
 
         help_menu = menubar.addMenu("Help")
         if help_menu is None:
-            from PyQt5.QtWidgets import QMenu
             help_menu = QMenu("Help", self)
             menubar.addMenu(help_menu)
         about_action = QAction("About GitBoss", self)
         about_action.triggered.connect(self._show_about_dialog)
         help_menu.addAction(about_action)
 
+    def _show_repo_context_menu(self, position) -> None:
+        item = self.repo_list_widget.itemAt(position)
+        if item is not None:
+            self.repo_list_widget.setCurrentItem(item)
+
+        menu = QMenu(self)
+        menu.addAction(self.add_repo_action)
+        menu.addAction(self.clone_repo_action)
+        if item is not None:
+            menu.addSeparator()
+            open_action = menu.addAction("Open Folder")
+            copy_action = menu.addAction("Copy Path")
+            menu.addAction(self.remove_repo_action)
+            chosen = menu.exec_(self.repo_list_widget.viewport().mapToGlobal(position))
+            if chosen == open_action:
+                self._open_in_file_manager()
+            elif chosen == copy_action:
+                self._copy_repo_path()
+            return
+        menu.exec_(self.repo_list_widget.viewport().mapToGlobal(position))
+
     def _on_tab_changed(self, index: int) -> None:
         tab_name = self.tab_widget.tabText(index)
         if self.status_bar is not None:
             self.status_bar.showMessage(f"Active tab: {tab_name}")
+        if tab_name in {"Issues", "PRs"}:
+            self._prefill_github_repository()
 
     def _on_repo_selected(self, current: QListWidgetItem | None, previous: QListWidgetItem | None) -> None:
         del previous
@@ -516,7 +550,7 @@ class MainWindow(QMainWindow):
             manager = GitManager(self.current_repo)
             dirty = manager.is_dirty()
             branch_list = manager.list_branches()
-            branch_refs = branch_list
+            branch_refs = manager.list_branch_refs()
             status_lines = list(manager.list_status())
         except ValueError as exc:
             QMessageBox.critical(self, "Repository Error", str(exc))
@@ -531,6 +565,11 @@ class MainWindow(QMainWindow):
         index = self.commit_ref_selector.findText(selected_ref)
         self.commit_ref_selector.setCurrentIndex(index if index >= 0 else 0)
         self.commit_ref_selector.blockSignals(False)
+
+        self.branch_list.clear()
+        for branch_ref in branch_refs:
+            self.branch_list.addItem(branch_ref)
+
 
         details = [
             f"Path: {self.current_repo}",
@@ -587,32 +626,6 @@ class MainWindow(QMainWindow):
         if self.current_commits:
             self.commit_list.setCurrentRow(0)
         self._log_activity(f"Loaded {len(self.current_commits)} commits from {rev}")
-    def _on_commit_graph_selected(self) -> None:
-        selected = self.commit_graph_tree.selectedItems()
-        if not selected:
-            return
-        sha = selected[0].data(0, Qt.ItemDataRole.UserRole)
-        if not sha:
-            return
-        for index, commit in enumerate(self.current_commits):
-            if commit.sha == sha:
-                self.commit_list.setCurrentRow(index)
-                break
-    def _prefill_github_repository(self) -> None:
-        if self.current_repo is None:
-            return
-
-        try:
-            inferred = GitManager(self.current_repo).get_origin_repository_name()
-        except Exception:  # noqa: BLE001
-            return
-
-        if not inferred:
-            return
-        if not self.issues_repo_input.text().strip():
-            self.issues_repo_input.setText(inferred)
-        if not self.pr_repo_input.text().strip():
-            self.pr_repo_input.setText(inferred)
 
     def _on_commit_selected(self, row: int) -> None:
         if row < 0 or row >= len(self.current_commits) or self.current_repo is None:
@@ -637,6 +650,18 @@ class MainWindow(QMainWindow):
             )
         self.commit_detail.setPlainText("\n".join(detail_lines))
 
+    def _on_commit_graph_selected(self) -> None:
+        selected = self.commit_graph_tree.selectedItems()
+        if not selected:
+            return
+        sha = selected[0].data(0, Qt.ItemDataRole.UserRole)
+        if not sha:
+            return
+        for index, commit in enumerate(self.current_commits):
+            if commit.sha == sha:
+                self.commit_list.setCurrentRow(index)
+                break
+
     def _refresh_diffs(self) -> None:
         if self.current_repo is None:
             return
@@ -654,17 +679,23 @@ class MainWindow(QMainWindow):
         self._log_activity(f"Computed diff {base_ref}..{target_ref}")
 
     def _refresh_issues(self) -> None:
-        repo = self.issues_repo_input.text().strip()
-        if not repo:
-            self.issues_output.setPlainText("Set repository as owner/repo.")
+        raw_repo = self.issues_repo_input.text().strip()
+        if not raw_repo:
+            self.issues_output.setPlainText("Set repository as owner/repo or a GitHub URL.")
             return
+        try:
+            repo = GitHubManager.normalize_repository_name(raw_repo)
+        except ValueError as exc:
+            self.issues_output.setPlainText(str(exc))
+            return
+        self.issues_repo_input.setText(repo)
         manager = self._github_manager_or_none()
         if manager is None:
             self.issues_output.setPlainText("GitHub token required. Set it in Settings.")
             return
         try:
             issues = manager.list_open_issues(repo)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.issues_output.setPlainText(str(exc))
             return
         if not issues:
@@ -674,17 +705,23 @@ class MainWindow(QMainWindow):
         self.issues_output.setPlainText("\n".join(lines))
 
     def _refresh_prs(self) -> None:
-        repo = self.pr_repo_input.text().strip()
-        if not repo:
-            self.pr_output.setPlainText("Set repository as owner/repo.")
+        raw_repo = self.pr_repo_input.text().strip()
+        if not raw_repo:
+            self.pr_output.setPlainText("Set repository as owner/repo or a GitHub URL.")
             return
+        try:
+            repo = GitHubManager.normalize_repository_name(raw_repo)
+        except ValueError as exc:
+            self.pr_output.setPlainText(str(exc))
+            return
+        self.pr_repo_input.setText(repo)
         manager = self._github_manager_or_none()
         if manager is None:
             self.pr_output.setPlainText("GitHub token required. Set it in Settings.")
             return
         try:
             pull_requests = manager.list_open_pull_requests(repo)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.pr_output.setPlainText(str(exc))
             return
         if not pull_requests:
@@ -695,6 +732,22 @@ class MainWindow(QMainWindow):
             for pr in pull_requests
         ]
         self.pr_output.setPlainText("\n".join(lines))
+
+    def _prefill_github_repository(self) -> None:
+        if self.current_repo is None:
+            return
+
+        try:
+            inferred = GitManager(self.current_repo).get_origin_repository_name()
+        except Exception:  # noqa: BLE001
+            return
+
+        if not inferred:
+            return
+        if not self.issues_repo_input.text().strip():
+            self.issues_repo_input.setText(inferred)
+        if not self.pr_repo_input.text().strip():
+            self.pr_repo_input.setText(inferred)
 
     def _save_settings(self) -> None:
         self.config.base_directory = self.settings_base_directory.text().strip()
@@ -734,8 +787,64 @@ class MainWindow(QMainWindow):
             self._log_activity(f"Added repository {path.name}")
 
     def _on_clone_repo(self) -> None:
-        QMessageBox.information(self, "Clone Repository", "Clone workflow is not yet implemented.")
-        self._log_activity("Viewed clone repository flow")
+        repository_url, ok = QInputDialog.getText(
+            self,
+            "Clone Repository",
+            "Repository URL (HTTPS or SSH):",
+        )
+        repository_url = repository_url.strip()
+        if not ok or not repository_url:
+            return
+
+        default_name = self._infer_repository_name(repository_url)
+        target_name, ok = QInputDialog.getText(
+            self,
+            "Clone Repository",
+            "Local directory name:",
+            text=default_name,
+        )
+        target_name = target_name.strip()
+        if not ok or not target_name:
+            return
+
+        base_directory = Path(self.config.base_directory).expanduser()
+        base_directory.mkdir(parents=True, exist_ok=True)
+        destination = base_directory / target_name
+        if destination.exists() and any(destination.iterdir()):
+            QMessageBox.warning(
+                self,
+                "Clone Repository",
+                f"Destination already exists and is not empty:\n{destination}",
+            )
+            return
+
+        try:
+            cloned_path = GitManager.clone(repository_url, destination)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Clone Failed", str(exc))
+            LOGGER.exception("Failed to clone %s", repository_url)
+            return
+
+        if cloned_path not in self.repositories:
+            self.repositories.append(cloned_path)
+            self.repositories.sort(key=lambda path: path.name.lower())
+            self.repo_list_widget.populate(self.repositories)
+            self.repo_list_widget.setCurrentRow(self.repositories.index(cloned_path))
+            self._persist_repositories()
+
+        self._log_activity(f"Cloned {repository_url} into {cloned_path}")
+        if self.status_bar is not None:
+            self.status_bar.showMessage(f"Cloned repository into {cloned_path}")
+
+    def _infer_repository_name(self, repository_url: str) -> str:
+        normalized = repository_url.strip().rstrip("/")
+        if normalized.endswith(".git"):
+            normalized = normalized[:-4]
+        if "/" in normalized:
+            return normalized.rsplit("/", maxsplit=1)[-1]
+        if ":" in normalized:
+            return normalized.rsplit(":", maxsplit=1)[-1]
+        return "repository"
 
     def _on_remove_repo(self) -> None:
         current_item = self.repo_list_widget.currentItem()
@@ -812,6 +921,57 @@ class MainWindow(QMainWindow):
 
     def _on_new_branch(self) -> None:
         QMessageBox.information(self, "New Branch", "Branch creation workflow is not yet implemented.")
+
+    def _show_branch_context_menu(self, position) -> None:
+        item = self.branch_list.itemAt(position)
+        if item is None or self.current_repo is None:
+            return
+        branch_name = item.text().strip()
+        if not branch_name:
+            return
+
+        menu = QMenu(self)
+        checkout_action = menu.addAction(f"Checkout {branch_name}")
+        view_commits_action = menu.addAction(f"Show commits for {branch_name}")
+        copy_action = menu.addAction("Copy branch name")
+        selected_action = menu.exec_(self.branch_list.viewport().mapToGlobal(position))
+        if selected_action is None:
+            return
+        if selected_action == checkout_action:
+            self._checkout_branch(branch_name)
+            return
+        if selected_action == view_commits_action:
+            self.commit_ref_selector.setCurrentText(branch_name)
+            self._refresh_commits()
+            return
+        if selected_action == copy_action:
+            clipboard = QApplication.clipboard()
+            if clipboard is not None:
+                clipboard.setText(branch_name)
+
+    def _checkout_branch_from_item(self, item: QListWidgetItem) -> None:
+        if item is None:
+            return
+        branch_name = item.text().strip()
+        if branch_name:
+            self._checkout_branch(branch_name)
+
+    def _checkout_branch(self, branch_name: str) -> None:
+        if self.current_repo is None:
+            return
+        try:
+            manager = GitManager(self.current_repo)
+            output = manager.run_git_command(f"checkout {branch_name}")
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Checkout Branch", str(exc))
+            return
+
+        self.log_console.append(f"$ git checkout {branch_name}\n{output}")
+        if self.status_bar is not None:
+            self.status_bar.showMessage(f"Checked out {branch_name}")
+        self._log_activity(f"Checked out branch {branch_name}")
+        self._refresh_current_repo()
+        self._refresh_commits()
 
     def _prompt_run_git_command(self) -> None:
         if self.current_repo is None:

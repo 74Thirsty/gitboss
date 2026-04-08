@@ -1,3 +1,11 @@
+def test_run_git_command_accepts_optional_git_prefix(tmp_path):
+    repo = Repo.init(tmp_path)
+    _commit_file(repo, tmp_path, "a.txt", "one\n", "init")
+
+    manager = GitManager(tmp_path)
+    output = manager.run_git_command("git status --short")
+
+    assert isinstance(output, str)
 from pathlib import Path
 
 from git import Repo
@@ -76,3 +84,16 @@ def test_list_commit_graph_returns_structured_rows(tmp_path):
     assert rows[0].sha
     assert rows[0].short_sha
     assert rows[0].subject
+
+
+
+def test_clone_creates_missing_parent_directory(tmp_path):
+    source_repo_path = tmp_path / "source"
+    source_repo = Repo.init(source_repo_path)
+    _commit_file(source_repo, source_repo_path, "README.md", "hello\n", "init")
+
+    destination = tmp_path / "nested" / "target"
+    cloned_path = GitManager.clone(str(source_repo_path), destination)
+
+    assert cloned_path == destination
+    assert (destination / ".git").exists()

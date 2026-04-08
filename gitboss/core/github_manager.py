@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List
+from urllib.parse import urlparse
 
 from github import Github, GithubException
 
@@ -94,11 +96,35 @@ class GitHubManager:
         return self.client
 
     def _get_repository(self, full_name: str):
+        full_name = self.normalize_repository_name(full_name)
         try:
             return self._require_client().get_repo(full_name)
         except GithubException as exc:
             LOGGER.error("Failed to access repository %s: %s", full_name, exc)
             raise
+
+    @staticmethod
+    def normalize_repository_name(value: str) -> str:
+        """Normalize user input into GitHub's owner/repo format."""
+        candidate = value.strip()
+        if not candidate:
+            raise ValueError("Repository is required. Use owner/repo, URL, or git@github.com:owner/repo.git.")
+
+        if candidate.startswith("git@github.com:"):
+            candidate = candidate.split(":", 1)[1]
+        elif candidate.startswith(("https://github.com/", "http://github.com/")):
+            parsed = urlparse(candidate)
+            candidate = parsed.path.lstrip("/")
+
+        candidate = candidate.removesuffix(".git").strip("/")
+        if "/" not in candidate:
+            raise ValueError("Invalid repository format. Expected owner/repo.")
+        owner, repo = candidate.split("/", 1)
+        if not owner or not repo:
+            raise ValueError("Invalid repository format. Expected owner/repo.")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", owner) or not re.fullmatch(r"[A-Za-z0-9_.-]+", repo):
+            raise ValueError("Invalid repository name. Use only URL-safe GitHub owner/repo characters.")
+        return f"{owner}/{repo}"
 
     def list_repositories(self) -> List[str]:
         try:
