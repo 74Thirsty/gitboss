@@ -8,6 +8,7 @@ from typing import Callable, Iterable, List
 from PyQt5.QtCore import Qt, QUrl
 from PyQt5.QtGui import QDesktopServices, QFont
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
     QAction,
     QApplication,
     QComboBox,
@@ -320,6 +321,7 @@ class MainWindow(QMainWindow):
         self.commit_graph_tree.setRootIsDecorated(False)
         self.commit_graph_tree.setUniformRowHeights(True)
         self.commit_graph_tree.setAlternatingRowColors(True)
+        self.commit_graph_tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.commit_graph_tree.setFont(QFont("Fira Code", 10))
         self.commit_graph_tree.itemSelectionChanged.connect(self._on_commit_graph_selected)
         layout.addWidget(self.commit_graph_tree, stretch=2)
@@ -339,17 +341,29 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(widget)
 
         form = QFormLayout()
-        self.diff_base_ref = QLineEdit()
-        self.diff_base_ref.setPlaceholderText("Base ref (default HEAD~1)")
-        self.diff_target_ref = QLineEdit()
-        self.diff_target_ref.setPlaceholderText("Target ref (default HEAD)")
+        self.diff_base_ref = QComboBox()
+        self.diff_base_ref.setEditable(True)
+        self.diff_base_ref.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.diff_base_ref.setMinimumWidth(420)
+        self.diff_base_ref.setToolTip("Base commit/ref (older side of the diff)")
+        self.diff_target_ref = QComboBox()
+        self.diff_target_ref.setEditable(True)
+        self.diff_target_ref.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.diff_target_ref.setMinimumWidth(420)
+        self.diff_target_ref.setToolTip("Target commit/ref (newer side of the diff)")
         form.addRow("Base", self.diff_base_ref)
         form.addRow("Target", self.diff_target_ref)
         layout.addLayout(form)
 
+        controls = QHBoxLayout()
+        self.diff_use_selected_button = QPushButton("Use 2 Selected Commits")
+        self.diff_use_selected_button.clicked.connect(self._set_diff_refs_from_selected_commits)
         self.diff_refresh_button = QPushButton("Compute Diff")
         self.diff_refresh_button.clicked.connect(self._refresh_diffs)
-        layout.addWidget(self.diff_refresh_button)
+        controls.addWidget(self.diff_use_selected_button)
+        controls.addWidget(self.diff_refresh_button)
+        controls.addStretch(1)
+        layout.addLayout(controls)
 
         self.diff_summary = QPlainTextEdit()
         self.diff_summary.setReadOnly(True)
@@ -625,6 +639,7 @@ class MainWindow(QMainWindow):
             )
         if self.current_commits:
             self.commit_list.setCurrentRow(0)
+        self._refresh_diff_commit_selectors()
         self._log_activity(f"Loaded {len(self.current_commits)} commits from {rev}")
 
     def _on_commit_selected(self, row: int) -> None:
@@ -665,8 +680,8 @@ class MainWindow(QMainWindow):
     def _refresh_diffs(self) -> None:
         if self.current_repo is None:
             return
-        base_ref = self.diff_base_ref.text().strip() or "HEAD~1"
-        target_ref = self.diff_target_ref.text().strip() or "HEAD"
+        base_ref = self.diff_base_ref.currentText().strip() or "HEAD~1"
+        target_ref = self.diff_target_ref.currentText().strip() or "HEAD"
         manager = GitManager(self.current_repo)
         try:
             diff_stat = manager.diff_stat(base_ref, target_ref)
@@ -677,6 +692,64 @@ class MainWindow(QMainWindow):
         self.diff_summary.setPlainText(diff_stat)
         self.diff_patch.setPlainText(diff_patch)
         self._log_activity(f"Computed diff {base_ref}..{target_ref}")
+
+    def _refresh_diff_commit_selectors(self) -> None:
+        labels = [f"{commit.short_sha} {commit.subject}" for commit in self.current_commits]
+        base_value = self.diff_base_ref.currentText().strip()
+        target_value = self.diff_target_ref.currentText().strip()
+
+        self.diff_base_ref.blockSignals(True)
+        self.diff_target_ref.blockSignals(True)
+        self.diff_base_ref.clear()
+        self.diff_target_ref.clear()
+        self.diff_base_ref.addItems(labels)
+        self.diff_target_ref.addItems(labels)
+        self.diff_base_ref.blockSignals(False)
+        self.diff_target_ref.blockSignals(False)
+
+        if base_value:
+            self.diff_base_ref.setEditText(base_value)
+        elif len(self.current_commits) > 1:
+            self.diff_base_ref.setCurrentIndex(1)
+        else:
+            self.diff_base_ref.setEditText("HEAD~1")
+
+        if target_value:
+            self.diff_target_ref.setEditText(target_value)
+        elif self.current_commits:
+            self.diff_target_ref.setCurrentIndex(0)
+        else:
+            self.diff_target_ref.setEditText("HEAD")
+
+    def _set_diff_refs_from_selected_commits(self) -> None:
+        selected_items = self.commit_graph_tree.selectedItems()
+        if len(selected_items) != 2:
+            QMessageBox.information(
+                self,
+                "Use Selected Commits",
+                "Select exactly two commits in the commit graph (Ctrl/Cmd+Click), then try again.",
+            )
+            return
+
+        selected_rows = []
+        for item in selected_items:
+            sha = item.data(0, Qt.ItemDataRole.UserRole)
+            if not sha:
+                continue
+            row_index = self.commit_graph_tree.indexOfTopLevelItem(item)
+            if row_index < 0:
+                continue
+            selected_rows.append((row_index, sha))
+        if len(selected_rows) != 2:
+            QMessageBox.warning(self, "Use Selected Commits", "Unable to resolve selected commit SHAs.")
+            return
+
+        selected_rows.sort(key=lambda value: value[0])
+        _, target_sha = selected_rows[0]
+        _, base_sha = selected_rows[1]
+        self.diff_base_ref.setEditText(base_sha)
+        self.diff_target_ref.setEditText(target_sha)
+        self._refresh_diffs()
 
     def _refresh_issues(self) -> None:
         raw_repo = self.issues_repo_input.text().strip()
