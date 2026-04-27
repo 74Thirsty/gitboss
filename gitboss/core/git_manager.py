@@ -247,7 +247,17 @@ class GitManager:
 
     def diff_patch(self, base_ref: str, target_ref: str) -> str:
         try:
-            return self._require_repo().git.diff(base_ref, target_ref)
+            return self._require_repo().git.diff(
+                "--patch",
+                "--full-index",
+                "--binary",
+                "--find-renames",
+                "--find-copies",
+                "--submodule=diff",
+                "--no-color",
+                base_ref,
+                target_ref,
+            )
         except GitCommandError as exc:
             raise ValueError(f"Failed to compute patch for {base_ref}..{target_ref}: {exc}") from exc
 
