@@ -342,12 +342,12 @@ class MainWindow(QMainWindow):
 
         form = QFormLayout()
         self.diff_base_ref = QComboBox()
-        self.diff_base_ref.setEditable(True)
+        self.diff_base_ref.setEditable(False)
         self.diff_base_ref.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.diff_base_ref.setMinimumWidth(420)
         self.diff_base_ref.setToolTip("Base commit/ref (older side of the diff)")
         self.diff_target_ref = QComboBox()
-        self.diff_target_ref.setEditable(True)
+        self.diff_target_ref.setEditable(False)
         self.diff_target_ref.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.diff_target_ref.setMinimumWidth(420)
         self.diff_target_ref.setToolTip("Target commit/ref (newer side of the diff)")
@@ -680,8 +680,8 @@ class MainWindow(QMainWindow):
     def _refresh_diffs(self) -> None:
         if self.current_repo is None:
             return
-        base_ref = self.diff_base_ref.currentText().strip() or "HEAD~1"
-        target_ref = self.diff_target_ref.currentText().strip() or "HEAD"
+        base_ref = self._resolve_diff_ref(self.diff_base_ref, fallback="HEAD~1")
+        target_ref = self._resolve_diff_ref(self.diff_target_ref, fallback="HEAD")
         manager = GitManager(self.current_repo)
         try:
             diff_stat = manager.diff_stat(base_ref, target_ref)
@@ -694,32 +694,29 @@ class MainWindow(QMainWindow):
         self._log_activity(f"Computed diff {base_ref}..{target_ref}")
 
     def _refresh_diff_commit_selectors(self) -> None:
-        labels = [f"{commit.short_sha} {commit.subject}" for commit in self.current_commits]
-        base_value = self.diff_base_ref.currentText().strip()
-        target_value = self.diff_target_ref.currentText().strip()
+        base_value = self._resolve_diff_ref(self.diff_base_ref, fallback="HEAD~1")
+        target_value = self._resolve_diff_ref(self.diff_target_ref, fallback="HEAD")
 
         self.diff_base_ref.blockSignals(True)
         self.diff_target_ref.blockSignals(True)
         self.diff_base_ref.clear()
         self.diff_target_ref.clear()
-        self.diff_base_ref.addItems(labels)
-        self.diff_target_ref.addItems(labels)
+
+        self.diff_base_ref.addItem("Previous commit (HEAD~1)", "HEAD~1")
+        self.diff_target_ref.addItem("Current commit (HEAD)", "HEAD")
+        self.diff_base_ref.addItem("Current commit (HEAD)", "HEAD")
+        self.diff_target_ref.addItem("Previous commit (HEAD~1)", "HEAD~1")
+
+        for commit in self.current_commits:
+            label = f"{commit.short_sha} {commit.subject}"
+            self.diff_base_ref.addItem(label, commit.sha)
+            self.diff_target_ref.addItem(label, commit.sha)
+
+        self._select_diff_ref_value(self.diff_base_ref, base_value, default_index=0)
+        self._select_diff_ref_value(self.diff_target_ref, target_value, default_index=0)
+
         self.diff_base_ref.blockSignals(False)
         self.diff_target_ref.blockSignals(False)
-
-        if base_value:
-            self.diff_base_ref.setEditText(base_value)
-        elif len(self.current_commits) > 1:
-            self.diff_base_ref.setCurrentIndex(1)
-        else:
-            self.diff_base_ref.setEditText("HEAD~1")
-
-        if target_value:
-            self.diff_target_ref.setEditText(target_value)
-        elif self.current_commits:
-            self.diff_target_ref.setCurrentIndex(0)
-        else:
-            self.diff_target_ref.setEditText("HEAD")
 
     def _set_diff_refs_from_selected_commits(self) -> None:
         selected_items = self.commit_graph_tree.selectedItems()
@@ -747,9 +744,22 @@ class MainWindow(QMainWindow):
         selected_rows.sort(key=lambda value: value[0])
         _, target_sha = selected_rows[0]
         _, base_sha = selected_rows[1]
-        self.diff_base_ref.setEditText(base_sha)
-        self.diff_target_ref.setEditText(target_sha)
+        self._select_diff_ref_value(self.diff_base_ref, base_sha, default_index=0)
+        self._select_diff_ref_value(self.diff_target_ref, target_sha, default_index=0)
         self._refresh_diffs()
+
+    def _resolve_diff_ref(self, selector: QComboBox, fallback: str) -> str:
+        value = selector.currentData()
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        text_value = selector.currentText().strip()
+        return text_value or fallback
+
+    def _select_diff_ref_value(self, selector: QComboBox, ref_value: str, default_index: int = 0) -> None:
+        index = selector.findData(ref_value)
+        if index < 0:
+            index = selector.findText(ref_value)
+        selector.setCurrentIndex(index if index >= 0 else default_index)
 
     def _refresh_issues(self) -> None:
         raw_repo = self.issues_repo_input.text().strip()
